@@ -1,0 +1,121 @@
+name: "Deploy Window Guard"
+description: "Blocks PRs during sensitive times unless a bypass label is present"
+inputs:
+  bypass_label:
+    description: "The label used to bypass the time restriction"
+    required: false
+    default: "bypass-deploy-window-guard"
+  scheduled:
+    description: "Whether this run was triggered by a schedule"
+    required: false
+    default: "false"
+  rerun_workflow_file:
+    description: "Workflow file to rerun for open PRs during scheduled mode"
+    required: false
+    default: "pr-checks.yaml"
+  start_hour_utc:
+    description: "Hour to start the block (UTC, 0-23)"
+    required: false
+    default: "16"
+  end_hour_utc:
+    description: "Hour to end the block (UTC, 0-23)"
+    required: false
+    default: "08"
+  comments_enabled:
+    description: "Whether to post comments in the PR when the status changes"
+    required: false
+    default: "true"
+
+runs:
+  using: "composite"
+  steps:
+    - name: Check Time and Label
+      shell: bash
+      run: |
+        HOUR=$(date -u +"%H")
+        DAY=$(date -u +"%u")
+        IS_SENSITIVE=false
+
+        echo "DEBUG: Hour is $HOUR, Day is $DAY"
+
+        if [ "$HOUR" -ge "${{ inputs.start_hour_utc }}" ] || [ "$HOUR" -lt "${{ inputs.end_hour_utc }}" ]; then
+          IS_SENSITIVE=true
+          echo "DEBUG: Time trigger activated"
+        fi
+
+        if [ "$DAY" -eq 6 ] || [ "$DAY" -eq 7 ]; then
+          IS_SENSITIVE=true
+          echo "DEBUG: Weekend trigger activated"
+        fi
+
+        if [ "${{ inputs.scheduled }}" = "true" ]; then
+          echo "DEBUG: Scheduled mode enabled"
+          echo "Success: Scheduled mode will rerun PR checks for open PRs."
+        else
+          # Extract labels and check specifically for the bypass string
+          RAW_LABELS='${{ toJson(github.event.pull_request.labels.*.name) }}'
+          echo "DEBUG: Labels found: $RAW_LABELS"
+
+          # Check if the bypass label exists in the array
+          if echo "$RAW_LABELS" | jq -e ". | contains([\"${{ inputs.bypass_label }}\"])" > /dev/null; then
+            HAS_LABEL=true
+          else
+            HAS_LABEL=false
+          fi
+
+          echo "DEBUG: IS_SENSITIVE=$IS_SENSITIVE, HAS_LABEL=$HAS_LABEL"
+
+          if [ "$IS_SENSITIVE" = "true" ] && [ "$HAS_LABEL" = "false" ]; then
+            echo "::error title=Deployment Blocked::SENSITIVE WINDOW DETECTED. Apply the '${{ inputs.bypass_label }}' label to merge."
+            echo "blocked" > "$RUNNER_TEMP/deploy-guard-blocked"
+          elif [ "$IS_SENSITIVE" = "true" ] && [ "$HAS_LABEL" = "true" ]; then
+            echo "bypass" > "$RUNNER_TEMP/deploy-guard-bypass"
+            echo "Success: No restrictions active or bypass applied."
+          else
+            echo "Success: No restrictions active or bypass applied."
+          fi
+        fi
+
+    - name: Comment on PR
+      if: inputs.comments_enabled == 'true'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        if [ "${{ inputs.scheduled }}" = "true" ]; then
+          echo "DEBUG: Scheduled mode rerunning '${{ inputs.rerun_workflow_file }}' for open PRs."
+          OPEN_PRS_JSON=$(gh pr list --repo "${{ github.repository }}" --state open --json number,headRefOid,labels --jq '.')
+          echo "$OPEN_PRS_JSON" | jq -c '.[]' | while IFS= read -r PR; do
+            PR_NUMBER=$(echo "$PR" | jq -r '.number')
+            HEAD_SHA=$(echo "$PR" | jq -r '.headRefOid')
+            HAS_LABEL=$(echo "$PR" | jq -r --arg BYPASS_LABEL "${{ inputs.bypass_label }}" '[.labels[].name] | contains([$BYPASS_LABEL])')
+
+            if [ "$HAS_LABEL" = "true" ]; then
+              echo "DEBUG: PR #$PR_NUMBER has bypass label, skipping rerun."
+              continue
+            fi
+
+            RUN_ID=$(gh api "repos/${{ github.repository }}/actions/workflows/${{ inputs.rerun_workflow_file }}/runs?event=pull_request&head_sha=${HEAD_SHA}&per_page=1" --jq '.workflow_runs[0].id // empty')
+            if [ -z "$RUN_ID" ]; then
+              echo "DEBUG: No prior pull_request run found for PR #$PR_NUMBER (head_sha=$HEAD_SHA)."
+              continue
+            fi
+
+            gh api -X POST "repos/${{ github.repository }}/actions/runs/${RUN_ID}/rerun" > /dev/null
+            echo "DEBUG: Triggered rerun for PR #$PR_NUMBER via run $RUN_ID."
+          done
+          exit 0
+        fi
+
+        if [ -f "$RUNNER_TEMP/deploy-guard-blocked" ]; then
+          gh pr comment ${{ github.event.pull_request.number }} --body "**Deployment blocked** - Sensitive window detected. Apply the \`${{ inputs.bypass_label }}\` label to merge."
+        elif [ -f "$RUNNER_TEMP/deploy-guard-bypass" ]; then
+          gh pr comment ${{ github.event.pull_request.number }} --body "**Bypass applied** - The \`${{ inputs.bypass_label }}\` label was found. Deployment is allowed during this window."
+        fi
+
+    - name: Fail if blocked
+      shell: bash
+      run: |
+        if [ -f "$RUNNER_TEMP/deploy-guard-blocked" ]; then
+          exit 1
+        fi
