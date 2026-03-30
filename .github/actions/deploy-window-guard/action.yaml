@@ -72,6 +72,7 @@ runs:
             echo "bypass" > "$RUNNER_TEMP/deploy-guard-bypass"
             echo "Success: No restrictions active or bypass applied."
           else
+            echo "unblocked" > "$RUNNER_TEMP/deploy-guard-unblocked"
             echo "Success: No restrictions active or bypass applied."
           fi
         fi
@@ -111,6 +112,13 @@ runs:
           gh pr comment ${{ github.event.pull_request.number }} --body "**Deployment blocked** - Sensitive window detected. Apply the \`${{ inputs.bypass_label }}\` label to merge."
         elif [ -f "$RUNNER_TEMP/deploy-guard-bypass" ]; then
           gh pr comment ${{ github.event.pull_request.number }} --body "**Bypass applied** - The \`${{ inputs.bypass_label }}\` label was found. Deployment is allowed during this window."
+        elif [ -f "$RUNNER_TEMP/deploy-guard-unblocked" ]; then
+          PR_NUM=${{ github.event.pull_request.number }}
+          LAST_GHA_BODY=$(gh api "repos/${{ github.repository }}/issues/${PR_NUM}/comments" --paginate \
+            --jq '[.[] | select(.user.login == "github-actions[bot]" or .user.login == "github-actions")] | sort_by(.created_at) | last | .body // empty')
+          if [[ "$LAST_GHA_BODY" == *"**Deployment blocked**"* ]]; then
+            gh pr comment "$PR_NUM" --body "**Deployment allowed** - Outside the sensitive deployment window. The \`${{ inputs.bypass_label }}\` label is not required to merge."
+          fi
         fi
 
     - name: Fail if blocked
