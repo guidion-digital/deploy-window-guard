@@ -16,8 +16,9 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Run Deploy Window Check
-        uses: guidion-digital/deploy-window-guard/.github/actions/deploy-window-guard@v1
+        uses: guidion-digital/deploy-window-guard/.github/actions/deploy-window-guard@v2
         with:
           bypass_label: "bypass-deploy-window-guard"
-          start_hour_utc: "17"
-          end_hour_utc: "8"
+          timezone: "Europe/Amsterdam"
+          start_hour: "16"
+          end_hour: "8"

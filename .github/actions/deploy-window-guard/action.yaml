@@ -13,12 +13,16 @@ inputs:
     description: "Workflow file to rerun for open PRs during scheduled mode"
     required: false
     default: "pr-checks.yaml"
-  start_hour_utc:
-    description: "Hour to start the block (UTC, 0-23)"
+  timezone:
+    description: "UTC by default (which doesn't account for DST)"
+    required: false
+    default: "UTC"
+  start_hour:
+    description: "Hour to start the block (0-23)"
     required: false
     default: "16"
-  end_hour_utc:
-    description: "Hour to end the block (UTC, 0-23)"
+  end_hour:
+    description: "Hour to end the block (0-23)"
     required: false
     default: "08"
   comments_enabled:
@@ -32,13 +36,13 @@ runs:
     - name: Check Time and Label
       shell: bash
       run: |
-        HOUR=$(date -u +"%H")
-        DAY=$(date -u +"%u")
+        HOUR=$(TZ="${{ inputs.timezone }}" date +"%H")
+        DAY=$(TZ="${{ inputs.timezone }}" date +"%u")
         IS_SENSITIVE=false
 
         echo "DEBUG: Hour is $HOUR, Day is $DAY"
 
-        if [ "$HOUR" -ge "${{ inputs.start_hour_utc }}" ] || [ "$HOUR" -lt "${{ inputs.end_hour_utc }}" ]; then
+        if [ "$HOUR" -ge "${{ inputs.start_hour }}" ] || [ "$HOUR" -lt "${{ inputs.end_hour }}" ]; then
           IS_SENSITIVE=true
           echo "DEBUG: Time trigger activated"
         fi
