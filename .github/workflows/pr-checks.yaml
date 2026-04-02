@@ -20,5 +20,5 @@ jobs:
         with:
           bypass_label: "bypass-deploy-window-guard"
           timezone: "Europe/Amsterdam"
-          start_hour: "17"
+          start_hour: "15"
           end_hour: "8"
